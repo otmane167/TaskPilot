@@ -140,7 +140,3 @@ var/taskpilot.json       Local data store
 - REST API
 - Admin dashboard
 - More tests
-
-## License
-
-Proprietary.
