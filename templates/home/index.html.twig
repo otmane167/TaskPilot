@@ -1,0 +1,240 @@
+{% extends 'base.html.twig' %}
+
+{% block title %}TaskPilot{% endblock %}
+
+{% set labels = {
+    backlog: 'Backlog',
+    todo: 'To do',
+    in_progress: 'In progress',
+    review: 'Review',
+    done: 'Done'
+} %}
+
+{% block body %}
+    <main class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="{{ path('app_home') }}">
+                <span>TP</span>
+                <strong>TaskPilot</strong>
+            </a>
+            <nav class="nav">
+                <a class="{{ page == 'dashboard' ? 'active' : '' }}" href="{{ path('app_home') }}">Dashboard</a>
+                <a class="{{ page == 'board' ? 'active' : '' }}" href="{{ path('app_board') }}">Board</a>
+                <a class="{{ page == 'projects' ? 'active' : '' }}" href="{{ path('app_projects') }}">Projects</a>
+                <a class="{{ page == 'teams' ? 'active' : '' }}" href="{{ path('app_teams') }}">Teams</a>
+            </nav>
+        </header>
+
+        {% for message in app.flashes('success') %}
+            <div class="flash">{{ message }}</div>
+        {% endfor %}
+
+        {% if page == 'dashboard' %}
+            <section class="hero">
+                <div>
+                    <p class="eyebrow">Workspace overview</p>
+                    <h1>Keep delivery clear without crowding the screen.</h1>
+                    <p class="muted">Track team workload, project progress, and the tasks that need attention this week.</p>
+                </div>
+                <a class="primary-link" href="{{ path('app_board') }}">Open board</a>
+            </section>
+
+            <section class="stats">
+                <div><strong>{{ stats.teams }}</strong><span>Teams</span></div>
+                <div><strong>{{ stats.projects }}</strong><span>Projects</span></div>
+                <div><strong>{{ stats.tasks }}</strong><span>Total tasks</span></div>
+                <div><strong>{{ stats.dueSoon }}</strong><span>Due soon</span></div>
+                <div><strong>{{ stats.overdue }}</strong><span>Overdue</span></div>
+                <div><strong>{{ stats.done }}</strong><span>Done</span></div>
+            </section>
+
+            <section class="content-grid">
+                <div class="panel">
+                    <div class="section-head">
+                        <div>
+                            <p class="eyebrow">Priority work</p>
+                            <h2>Active tasks</h2>
+                        </div>
+                        <a href="{{ path('app_board') }}">View all</a>
+                    </div>
+                    {% for task in tasks|filter(task => task.status != 'done')|slice(0, 5) %}
+                        {% set project = projects|filter(project => project.id == task.projectId)|first %}
+                        <div class="list-row">
+                            <div>
+                                <strong>{{ task.title }}</strong>
+                                <span>{{ project.name|default('No project') }} | {{ task.assignee ?: 'Unassigned' }}</span>
+                            </div>
+                            <em>{{ task.dueDate ?: 'No due date' }}</em>
+                        </div>
+                    {% else %}
+                        <p class="empty">No active tasks.</p>
+                    {% endfor %}
+                </div>
+
+                <div class="panel">
+                    <div class="section-head">
+                        <div>
+                            <p class="eyebrow">Portfolio</p>
+                            <h2>Projects</h2>
+                        </div>
+                        <a href="{{ path('app_projects') }}">Manage</a>
+                    </div>
+                    {% for project in projects|slice(0, 4) %}
+                        {% set team = teams|filter(team => team.id == project.teamId)|first %}
+                        <div class="list-row">
+                            <div>
+                                <strong>{{ project.name }}</strong>
+                                <span>{{ team.name|default('No team') }}</span>
+                            </div>
+                            <em>{{ project.priority }}</em>
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endif %}
+
+        {% if page == 'board' %}
+            <section class="page-heading">
+                <div>
+                    <p class="eyebrow">Kanban board</p>
+                    <h1>Move work from idea to done.</h1>
+                </div>
+                <form action="{{ path('app_task_create') }}" method="post" class="quick-form">
+                    <input name="title" required placeholder="New task">
+                    <select name="projectId" required>
+                        {% for project in projects %}
+                            <option value="{{ project.id }}">{{ project.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <input name="assignee" placeholder="Assignee">
+                    <input type="date" name="dueDate">
+                    <select name="priority">
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="urgent">Urgent</option>
+                        <option value="low">Low</option>
+                    </select>
+                    <button type="submit">Add task</button>
+                </form>
+            </section>
+
+            <section class="board">
+                {% for status, columnTasks in tasksByStatus %}
+                    <div class="column">
+                        <div class="column-head">
+                            <h3>{{ labels[status] }}</h3>
+                            <span>{{ columnTasks|length }}</span>
+                        </div>
+                        {% for task in columnTasks %}
+                            {% set project = projects|filter(project => project.id == task.projectId)|first %}
+                            <article class="task-card priority-{{ task.priority }}">
+                                <div class="task-top">
+                                    <span>{{ project.name|default('No project') }}</span>
+                                    <strong>{{ task.priority }}</strong>
+                                </div>
+                                <h4>{{ task.title }}</h4>
+                                <p>{{ task.description ?: 'No description yet.' }}</p>
+                                <div class="task-meta">
+                                    <span>{{ task.assignee ?: 'Unassigned' }}</span>
+                                    <span>{{ task.dueDate ?: 'No due date' }}</span>
+                                </div>
+                                <div class="task-actions">
+                                    <form action="{{ path('app_task_status', { id: task.id }) }}" method="post">
+                                        <select name="status" onchange="this.form.submit()">
+                                            {% for key, label in labels %}
+                                                <option value="{{ key }}" {{ key == task.status ? 'selected' : '' }}>{{ label }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </form>
+                                    <form action="{{ path('app_task_delete', { id: task.id }) }}" method="post">
+                                        <button type="submit" class="ghost">Delete</button>
+                                    </form>
+                                </div>
+                            </article>
+                        {% else %}
+                            <p class="empty">No tasks here.</p>
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+            </section>
+        {% endif %}
+
+        {% if page == 'projects' %}
+            <section class="split-page">
+                <div class="panel form-panel">
+                    <p class="eyebrow">New project</p>
+                    <h1>Create project</h1>
+                    <form action="{{ path('app_project_create') }}" method="post" class="stack">
+                        <label>Project<input name="name" required placeholder="Mobile app launch"></label>
+                        <label>
+                            Team
+                            <select name="teamId">
+                                {% for team in teams %}
+                                    <option value="{{ team.id }}">{{ team.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <label>Description<textarea name="description" rows="4" placeholder="What should this project deliver?"></textarea></label>
+                        <div class="field-grid">
+                            <label>Priority
+                                <select name="priority">
+                                    <option value="medium">Medium</option>
+                                    <option value="high">High</option>
+                                    <option value="urgent">Urgent</option>
+                                    <option value="low">Low</option>
+                                </select>
+                            </label>
+                            <label>Deadline<input type="date" name="deadline"></label>
+                        </div>
+                        <button type="submit">Add project</button>
+                    </form>
+                </div>
+
+                <div class="panel">
+                    <p class="eyebrow">Current portfolio</p>
+                    <h1>Projects</h1>
+                    {% for project in projects %}
+                        {% set team = teams|filter(team => team.id == project.teamId)|first %}
+                        <div class="large-row">
+                            <div>
+                                <strong>{{ project.name }}</strong>
+                                <p>{{ project.description ?: 'No description' }}</p>
+                                <span>{{ team.name|default('No team') }} | Deadline: {{ project.deadline ?: 'None' }}</span>
+                            </div>
+                            <em>{{ project.priority }}</em>
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endif %}
+
+        {% if page == 'teams' %}
+            <section class="split-page">
+                <div class="panel form-panel">
+                    <p class="eyebrow">New team</p>
+                    <h1>Create team</h1>
+                    <form action="{{ path('app_team_create') }}" method="post" class="stack">
+                        <label>Team name<input name="name" required placeholder="Engineering"></label>
+                        <label>Team lead<input name="lead" placeholder="Amina Lead"></label>
+                        <label>Members<input name="members" placeholder="Ali, Sara, Nora"></label>
+                        <button type="submit">Add team</button>
+                    </form>
+                </div>
+
+                <div class="panel">
+                    <p class="eyebrow">People</p>
+                    <h1>Teams</h1>
+                    {% for team in teams %}
+                        <div class="large-row">
+                            <div>
+                                <strong>{{ team.name }}</strong>
+                                <p>{{ team.members|join(', ') ?: 'No members yet' }}</p>
+                                <span>Lead: {{ team.lead ?: 'No lead' }}</span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endif %}
+    </main>
+{% endblock %}
