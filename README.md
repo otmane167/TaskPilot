@@ -21,7 +21,6 @@ TaskPilot is a Symfony 7 web app for managing teams, projects, and tasks. It inc
 - Symfony UX Turbo and Stimulus
 - Symfony Asset Mapper
 - Doctrine ORM
-- PostgreSQL with Docker Compose
 - PHPUnit
 
 ## Getting Started
@@ -81,12 +80,6 @@ The app currently stores data in:
 
 ```text
 var/taskpilot.json
-```
-
-PostgreSQL is configured for future database-backed features:
-
-```bash
-docker compose up -d
 ```
 
 ## Useful Commands
