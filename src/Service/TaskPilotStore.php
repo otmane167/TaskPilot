@@ -2,255 +2,219 @@
 
 namespace App\Service;
 
-use Symfony\Component\DependencyInjection\Attribute\Autowire;
-use Symfony\Component\Filesystem\Filesystem;
+use App\Entity\Project;
+use App\Entity\Task;
+use App\Entity\Team;
+use Doctrine\ORM\EntityManagerInterface;
 
 final class TaskPilotStore
 {
-    private string $path;
-
-    public function __construct(
-        #[Autowire('%kernel.project_dir%')]
-        string $projectDir,
-        private readonly Filesystem $filesystem,
-    ) {
-        $this->path = $projectDir.'/var/taskpilot.json';
+    public function __construct(private readonly EntityManagerInterface $entityManager)
+    {
     }
 
     public function dashboard(): array
     {
-        $data = $this->read();
+        $teams = $this->entityManager->getRepository(Team::class)->findBy([], ['createdAt' => 'ASC']);
+        $projects = $this->entityManager->getRepository(Project::class)->findBy([], ['createdAt' => 'ASC']);
+        $tasks = $this->entityManager->getRepository(Task::class)->findBy([], ['createdAt' => 'ASC']);
+
+        if (!$teams && !$projects && !$tasks) {
+            $this->seed();
+            return $this->dashboard();
+        }
+
+        $teamRows = [];
+        foreach ($teams as $team) {
+            $teamRows[] = [
+                'id' => $team->getId(),
+                'name' => $team->getName(),
+                'lead' => $team->getLead() ?? '',
+                'members' => $team->getMembers(),
+            ];
+        }
+
+        $projectRows = [];
+        foreach ($projects as $project) {
+            $deadline = $project->getDeadline();
+            $team = $project->getTeam();
+            $projectRows[] = [
+                'id' => $project->getId(),
+                'teamId' => $team ? $team->getId() : '',
+                'name' => $project->getName(),
+                'description' => $project->getDescription(),
+                'priority' => $project->getPriority(),
+                'deadline' => $deadline ? $deadline->format('Y-m-d') : '',
+            ];
+        }
+
+        $taskRows = [];
+        foreach ($tasks as $task) {
+            $dueDate = $task->getDueDate();
+            $taskRows[] = [
+                'id' => $task->getId(),
+                'projectId' => $task->getProject()->getId(),
+                'title' => $task->getTitle(),
+                'description' => $task->getDescription(),
+                'assignee' => $task->getAssignee() ?? '',
+                'status' => $task->getStatus(),
+                'priority' => $task->getPriority(),
+                'dueDate' => $dueDate ? $dueDate->format('Y-m-d') : '',
+            ];
+        }
+
         $today = new \DateTimeImmutable('today');
-
-        $stats = [
-            'teams' => count($data['teams']),
-            'projects' => count($data['projects']),
-            'tasks' => count($data['tasks']),
-            'done' => 0,
-            'overdue' => 0,
-            'dueSoon' => 0,
-        ];
-
-        foreach ($data['tasks'] as $task) {
+        $stats = ['teams' => count($teamRows), 'projects' => count($projectRows), 'tasks' => count($taskRows), 'done' => 0, 'overdue' => 0, 'dueSoon' => 0];
+        foreach ($taskRows as $task) {
             if ($task['status'] === 'done') {
-                ++$stats['done'];
+                $stats['done']++;
             }
 
-            if ($task['dueDate'] !== '') {
-                $dueDate = new \DateTimeImmutable($task['dueDate']);
+            if ($task['dueDate'] === '' || $task['status'] === 'done') {
+                continue;
+            }
 
-                if ($task['status'] !== 'done' && $dueDate < $today) {
-                    ++$stats['overdue'];
-                }
+            $dueDate = new \DateTimeImmutable($task['dueDate']);
+            if ($dueDate < $today) {
+                $stats['overdue']++;
+            }
 
-                if ($task['status'] !== 'done' && $dueDate >= $today && $dueDate <= $today->modify('+7 days')) {
-                    ++$stats['dueSoon'];
-                }
+            if ($dueDate >= $today && $dueDate <= $today->modify('+7 days')) {
+                $stats['dueSoon']++;
             }
         }
 
-        $data['stats'] = $stats;
-        $data['tasksByStatus'] = $this->groupTasksByStatus($data['tasks']);
-
-        return $data;
+        return [
+            'teams' => $teamRows, 'projects' => $projectRows, 'tasks' => $taskRows, 'stats' => $stats,
+            'tasksByStatus' => $this->groupTasksByStatus($taskRows),
+        ];
     }
 
     public function addTeam(array $input): void
     {
-        $data = $this->read();
-
-        $data['teams'][] = [
-            'id' => $this->id(),
-            'name' => $this->text($input['name'] ?? 'New team'),
-            'lead' => $this->text($input['lead'] ?? ''),
-            'members' => $this->csv($input['members'] ?? ''),
-            'createdAt' => $this->now(),
-        ];
-
-        $this->write($data);
+        $name = $this->text($input['name'] ?? 'New team');
+        $lead = $this->text($input['lead'] ?? '');
+        $members = $this->csv($input['members'] ?? '');
+        $team = new Team($name, $lead !== '' ? $lead : null, $members);
+        $this->entityManager->persist($team);
+        $this->entityManager->flush();
     }
 
     public function addProject(array $input): void
     {
-        $data = $this->read();
-
-        $data['projects'][] = [
-            'id' => $this->id(),
-            'teamId' => $input['teamId'] ?? '',
-            'name' => $this->text($input['name'] ?? 'New project'),
-            'description' => $this->text($input['description'] ?? ''),
-            'priority' => $input['priority'] ?? 'medium',
-            'deadline' => $input['deadline'] ?? '',
-            'createdAt' => $this->now(),
-        ];
-
-        $this->write($data);
+        $teamId = (string) ($input['teamId'] ?? '');
+        $team = $teamId !== '' ? $this->entityManager->find(Team::class, $teamId) : null;
+        $name = $this->text($input['name'] ?? 'New project');
+        $description = $this->text($input['description'] ?? '');
+        $priority = $this->choice($input['priority'] ?? '', ['low', 'medium', 'high', 'urgent'], 'medium');
+        $deadline = $this->date($input['deadline'] ?? '');
+        $project = new Project($name, $team, $description, $priority, $deadline);
+        $this->entityManager->persist($project);
+        $this->entityManager->flush();
     }
 
     public function addTask(array $input): void
     {
-        $data = $this->read();
-
-        $data['tasks'][] = [
-            'id' => $this->id(),
-            'projectId' => $input['projectId'] ?? '',
-            'title' => $this->text($input['title'] ?? 'New task'),
-            'description' => $this->text($input['description'] ?? ''),
-            'assignee' => $this->text($input['assignee'] ?? 'Unassigned'),
-            'status' => $input['status'] ?? 'todo',
-            'priority' => $input['priority'] ?? 'medium',
-            'dueDate' => $input['dueDate'] ?? '',
-            'createdAt' => $this->now(),
-        ];
-
-        $this->write($data);
+        $projectId = (string) ($input['projectId'] ?? '');
+        $project = $this->entityManager->find(Project::class, $projectId);
+        if (!$project instanceof Project) return;
+        $title = $this->text($input['title'] ?? 'New task');
+        $description = $this->text($input['description'] ?? '');
+        $assignee = $this->text($input['assignee'] ?? '');
+        $status = $this->choice($input['status'] ?? '', ['backlog', 'todo', 'in_progress', 'review', 'done'], 'todo');
+        $priority = $this->choice($input['priority'] ?? '', ['low', 'medium', 'high', 'urgent'], 'medium');
+        $dueDate = $this->date($input['dueDate'] ?? '');
+        $task = new Task($project, $title, $description, $assignee !== '' ? $assignee : null, $status, $priority, $dueDate);
+        $this->entityManager->persist($task);
+        $this->entityManager->flush();
     }
 
     public function updateTaskStatus(string $id, string $status): void
     {
-        $data = $this->read();
-
-        foreach ($data['tasks'] as &$task) {
-            if ($task['id'] === $id) {
-                $task['status'] = $status;
-                $task['updatedAt'] = $this->now();
-                break;
-            }
+        $task = $this->entityManager->find(Task::class, $id);
+        if ($task instanceof Task && in_array($status, ['backlog', 'todo', 'in_progress', 'review', 'done'], true)) {
+            $task->changeStatus($status);
+            $this->entityManager->flush();
         }
-
-        $this->write($data);
     }
 
     public function deleteTask(string $id): void
     {
-        $data = $this->read();
-        $data['tasks'] = array_values(array_filter($data['tasks'], static fn (array $task): bool => $task['id'] !== $id));
-
-        $this->write($data);
-    }
-
-    private function read(): array
-    {
-        if (!$this->filesystem->exists($this->path)) {
-            $this->write($this->seed());
+        $task = $this->entityManager->find(Task::class, $id);
+        if ($task instanceof Task) {
+            $this->entityManager->remove($task);
+            $this->entityManager->flush();
         }
-
-        $data = json_decode((string) file_get_contents($this->path), true);
-
-        return is_array($data) ? array_replace_recursive($this->seed(false), $data) : $this->seed();
     }
 
-    private function write(array $data): void
+    private function seed(): void
     {
-        $this->filesystem->dumpFile($this->path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-    }
-
-    private function seed(bool $withData = true): array
-    {
-        if (!$withData) {
-            return ['teams' => [], 'projects' => [], 'tasks' => []];
-        }
-
-        $team = $this->id();
-        $design = $this->id();
-        $platform = $this->id();
-
-        return [
-            'teams' => [
-                [
-                    'id' => $team,
-                    'name' => 'Product Team',
-                    'lead' => 'Sara Manager',
-                    'members' => ['Sara Manager', 'Yassine Dev', 'Nora QA'],
-                    'createdAt' => $this->now(),
-                ],
-            ],
-            'projects' => [
-                [
-                    'id' => $design,
-                    'teamId' => $team,
-                    'name' => 'Client Portal Redesign',
-                    'description' => 'Improve the client workspace, navigation, and task visibility.',
-                    'priority' => 'high',
-                    'deadline' => (new \DateTimeImmutable('+14 days'))->format('Y-m-d'),
-                    'createdAt' => $this->now(),
-                ],
-                [
-                    'id' => $platform,
-                    'teamId' => $team,
-                    'name' => 'Operations Dashboard',
-                    'description' => 'Track overdue work, team workload, and weekly delivery.',
-                    'priority' => 'medium',
-                    'deadline' => (new \DateTimeImmutable('+30 days'))->format('Y-m-d'),
-                    'createdAt' => $this->now(),
-                ],
-            ],
-            'tasks' => [
-                [
-                    'id' => $this->id(),
-                    'projectId' => $design,
-                    'title' => 'Define project roles',
-                    'description' => 'Confirm owner, manager, and member responsibilities.',
-                    'assignee' => 'Sara Manager',
-                    'status' => 'done',
-                    'priority' => 'high',
-                    'dueDate' => (new \DateTimeImmutable('-1 day'))->format('Y-m-d'),
-                    'createdAt' => $this->now(),
-                ],
-                [
-                    'id' => $this->id(),
-                    'projectId' => $design,
-                    'title' => 'Build task workflow',
-                    'description' => 'Support todo, in progress, review, and done states.',
-                    'assignee' => 'Yassine Dev',
-                    'status' => 'in_progress',
-                    'priority' => 'urgent',
-                    'dueDate' => (new \DateTimeImmutable('+2 days'))->format('Y-m-d'),
-                    'createdAt' => $this->now(),
-                ],
-                [
-                    'id' => $this->id(),
-                    'projectId' => $platform,
-                    'title' => 'QA dashboard metrics',
-                    'description' => 'Verify overdue and due-soon calculations.',
-                    'assignee' => 'Nora QA',
-                    'status' => 'review',
-                    'priority' => 'medium',
-                    'dueDate' => (new \DateTimeImmutable('+5 days'))->format('Y-m-d'),
-                    'createdAt' => $this->now(),
-                ],
-            ],
-        ];
+        $team = new Team('Product Team', 'Sara Manager', ['Sara Manager', 'Yassine Dev', 'Nora QA']);
+        $design = new Project('Client Portal Redesign', $team, 'Improve the client workspace, navigation, and task visibility.', 'high', new \DateTimeImmutable('+14 days'));
+        $platform = new Project('Operations Dashboard', $team, 'Track overdue work, team workload, and weekly delivery.', 'medium', new \DateTimeImmutable('+30 days'));
+        $this->entityManager->persist($team);
+        $this->entityManager->persist($design);
+        $this->entityManager->persist($platform);
+        $this->entityManager->persist(new Task($design, 'Define project roles', 'Confirm owner, manager, and member responsibilities.', 'Sara Manager', 'done', 'high', new \DateTimeImmutable('-1 day')));
+        $this->entityManager->persist(new Task($design, 'Build task workflow', 'Support todo, in progress, review, and done states.', 'Yassine Dev', 'in_progress', 'urgent', new \DateTimeImmutable('+2 days')));
+        $this->entityManager->persist(new Task($platform, 'QA dashboard metrics', 'Verify overdue and due-soon calculations.', 'Nora QA', 'review', 'medium', new \DateTimeImmutable('+5 days')));
+        $this->entityManager->flush();
     }
 
     private function groupTasksByStatus(array $tasks): array
     {
         $columns = ['backlog' => [], 'todo' => [], 'in_progress' => [], 'review' => [], 'done' => []];
-
         foreach ($tasks as $task) {
-            $columns[$task['status'] ?? 'todo'][] = $task;
+            $columns[$task['status']][] = $task;
         }
 
         return $columns;
     }
 
-    private function id(): string
+    private function date(mixed $value): ?\DateTimeImmutable
     {
-        return bin2hex(random_bytes(6));
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+        if ($date && $date->format('Y-m-d') === $value) {
+            return $date;
+        }
+
+        return null;
     }
 
-    private function now(): string
+    private function choice(mixed $value, array $allowed, string $default): string
     {
-        return (new \DateTimeImmutable())->format(\DateTimeInterface::ATOM);
+        if (is_string($value) && in_array($value, $allowed, true)) {
+            return $value;
+        }
+
+        return $default;
     }
 
-    private function text(string $value): string
+    private function text(mixed $value): string
     {
-        return trim(strip_tags($value));
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        return trim(strip_tags((string) $value));
     }
 
-    private function csv(string $value): array
+    private function csv(mixed $value): array
     {
-        return array_values(array_filter(array_map(fn (string $item): string => $this->text($item), explode(',', $value))));
+        $members = explode(',', $this->text($value));
+        $cleanMembers = [];
+
+        foreach ($members as $member) {
+            $member = $this->text($member);
+            if ($member !== '') {
+                $cleanMembers[] = $member;
+            }
+        }
+
+        return $cleanMembers;
     }
 }

@@ -10,7 +10,7 @@ TaskPilot is a Symfony 7 web app for managing teams, projects, and tasks. It inc
 - Assign tasks, priorities, statuses, and due dates
 - Update task status from the board
 - Delete tasks
-- JSON-backed local data store
+- Doctrine ORM persistence in PostgreSQL
 - Responsive Twig interface
 
 ## Tech Stack
@@ -21,6 +21,7 @@ TaskPilot is a Symfony 7 web app for managing teams, projects, and tasks. It inc
 - Symfony UX Turbo and Stimulus
 - Symfony Asset Mapper
 - Doctrine ORM
+- PostgreSQL with Docker Compose
 - PHPUnit
 
 ## Getting Started
@@ -76,10 +77,11 @@ php -S 127.0.0.1:8000 -t public
 
 ## Database
 
-The app currently stores data in:
+The app stores teams, projects, and tasks in PostgreSQL. Start the database and apply the schema:
 
-```text
-var/taskpilot.json
+```bash
+docker compose up -d
+php bin/console doctrine:migrations:migrate
 ```
 
 ## Useful Commands
@@ -96,7 +98,7 @@ Clear the Symfony cache:
 php bin/console cache:clear
 ```
 
-Run database migrations after entities are added:
+Run database migrations:
 
 ```bash
 php bin/console doctrine:migrations:migrate
@@ -112,7 +114,8 @@ src/Controller/          Controllers
 src/Service/             Services
 templates/               Twig templates
 tests/                   Tests
-var/taskpilot.json       Local data store
+migrations/              Database schema migrations
+src/Entity/               Doctrine entities and relationships
 ```
 
 ## Main Routes
@@ -125,7 +128,6 @@ var/taskpilot.json       Local data store
 ## Roadmap
 
 - Authentication and user profiles
-- Doctrine entities and migrations
 - Role-based access control
 - Comments and activity logs
 - File attachments
@@ -133,3 +135,7 @@ var/taskpilot.json       Local data store
 - REST API
 - Admin dashboard
 - More tests
+
+## License
+
+Proprietary.
